@@ -39,7 +39,7 @@ menu "Configuration"
 
         config AM2320_I2C_SENSOR_ADDRESS
             hex "AM2320 I2C address"
-            default 0xb8
+            default 0xB8
             help
                 I2C AM2320 address.
 
