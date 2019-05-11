@@ -1,6 +1,6 @@
 # Home-Sensor-Station
 
-This is a home sensor station with a simple web server to present data. It runs freeRTOS. It consists of:
+This is a home sensor station with a simple web server to present data. It runs FreeRTOS. It consists of:
 - ESP32-DevKitC-32D WiFi + BT 4.2 
 - AM2320 (temperature and humidity measurement)
 - PIR (movement detection)
