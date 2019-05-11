@@ -7,16 +7,17 @@
 #include "sdkconfig.h"
 
 
-#define DATA_LENGTH 16
+#define DATA_LENGTH 512
 #define ACK_CHECK_ENABLED 0x1
 #define ACK_CHECK_DISABLED 0x0
 #define ACK_VALUE 0x0
 #define NACK_VALUE 0x1
 
-#define AM2320_I2C_SENSOR_ADDRESS CONFIG_AM2320_I2C_SENSOR_ADDRESS
+#define AM2320_I2C_SENSOR_ADDRESS CONFIG_I2C_AM2320_SENSOR_ADDRESS
 #define AM2320_FUNCTION_CODE_READ 0x03
-#define AM2320_START_REGISTER_ADDRESS 0x0
-#define AM2320_NUMBER_OF_REGISTERS_TO_READ 0x04
+#define AM2320_HUMIDITY_START_REGISTER 0x00
+#define AM2320_TEMPERATURE_START_REGISTER 0x00
+#define AM2320_NUMBER_OF_REGISTERS_TO_READ 0x2
 
 SemaphoreHandle_t mutex;
 
@@ -38,88 +39,113 @@ static esp_err_t i2c_master_init()
 
 static esp_err_t AM2320_wake_sensor(i2c_port_t i2c_port_number)
 {
-    //request temperature and humidity values from the sensor
+    //Wake sensor
     esp_err_t ret;
     i2c_cmd_handle_t cmd = i2c_cmd_link_create();
     i2c_master_start(cmd);
-    i2c_master_write_byte(cmd, AM2320_I2C_SENSOR_ADDRESS + NACK_VALUE, ACK_CHECK_DISABLED);
+    i2c_master_write_byte(cmd, (AM2320_I2C_SENSOR_ADDRESS << 1) | I2C_MASTER_WRITE, ACK_CHECK_DISABLED);
     i2c_master_stop(cmd);
     ret = i2c_master_cmd_begin(i2c_port_number, cmd, 1000 / portTICK_RATE_MS);
     i2c_cmd_link_delete(cmd);
-    printf("Return code for wake: %d \n", ret);
     return ret;
 }
 
-static esp_err_t AM2320_request_humidity_and_temperature_values(i2c_port_t i2c_port_number)
+static esp_err_t AM2320_request(i2c_port_t i2c_port_number, uint8_t start_register)
 {
-    //request temperature and humidity values from the sensor
+    //Request values from sensor
     esp_err_t ret;
     i2c_cmd_handle_t cmd = i2c_cmd_link_create();
     i2c_master_start(cmd);
     i2c_master_write_byte(cmd, (AM2320_I2C_SENSOR_ADDRESS << 1) | I2C_MASTER_WRITE, ACK_CHECK_ENABLED);
     i2c_master_write_byte(cmd, AM2320_FUNCTION_CODE_READ, ACK_CHECK_ENABLED);
-    i2c_master_write_byte(cmd, AM2320_START_REGISTER_ADDRESS, ACK_CHECK_ENABLED);
+    i2c_master_write_byte(cmd, start_register, ACK_CHECK_ENABLED);
     i2c_master_write_byte(cmd, AM2320_NUMBER_OF_REGISTERS_TO_READ, ACK_CHECK_ENABLED);
     i2c_master_stop(cmd);
     ret = i2c_master_cmd_begin(i2c_port_number, cmd, 1000 / portTICK_RATE_MS);
     i2c_cmd_link_delete(cmd);
-    printf("Return code for request: %d \n", ret);
     return ret;
 }
 
 
-static esp_err_t AM2320_receive_humidity_and_temperature_values(i2c_port_t i2c_port_number, uint16_t *humidity_buffer, int16_t *temperature_buffer, uint8_t dump_buffer, size_t data_size)
+static esp_err_t AM2320_read(i2c_port_t i2c_port_number, uint8_t *upper_bits_buffer,
+                             uint8_t *lower_bits_buffer, uint8_t *dump_buffer, size_t data_size)
 {
-    //receive temperature and humidity values from the sensor
+    //Read values from sensor
     esp_err_t ret;
     i2c_cmd_handle_t cmd = i2c_cmd_link_create();
     i2c_master_start(cmd);
-    i2c_master_write_byte(cmd, ((AM2320_I2C_SENSOR_ADDRESS + 0x1) << 1) | I2C_MASTER_READ, ACK_CHECK_ENABLED);
+    i2c_master_write_byte(cmd, (AM2320_I2C_SENSOR_ADDRESS << 1) | I2C_MASTER_READ, ACK_CHECK_ENABLED);
     i2c_master_read_byte(cmd, dump_buffer, ACK_VALUE);
     i2c_master_read_byte(cmd, dump_buffer, ACK_VALUE);
-    i2c_master_read(cmd, humidity_buffer, data_size - 1, ACK_VALUE);
-    i2c_master_read(cmd, temperature_buffer, data_size - 1, ACK_VALUE);
     i2c_master_read_byte(cmd, dump_buffer, ACK_VALUE);
-    i2c_master_read_byte(cmd, 1, NACK_VALUE);
+    i2c_master_read(cmd, upper_bits_buffer, data_size, ACK_VALUE);
+    i2c_master_read(cmd, lower_bits_buffer, data_size, ACK_VALUE);
+    i2c_master_read_byte(cmd, dump_buffer, ACK_VALUE);
+    i2c_master_read_byte(cmd, dump_buffer, NACK_VALUE);
     i2c_master_stop(cmd);
     ret = i2c_master_cmd_begin(i2c_port_number, cmd, 1000 / portTICK_RATE_MS);
     i2c_cmd_link_delete(cmd);
-    printf("Return code for receive: %d \n", ret);
     return ret;
 }
 
-void read_am2320_sensor(void * pvParameters)
+void readSensor(uint8_t value, uint16_t * buffer, uint8_t * lower_bits_buffer,
+                uint8_t * upper_bits_buffer, uint8_t * dump_buffer)
+{ 
+    if (value == 0)
+    {    
+        AM2320_wake_sensor(CONFIG_I2C_MASTER_PORT_NUMBER);
+        vTaskDelay(10 / portTICK_RATE_MS);
+        AM2320_request(CONFIG_I2C_MASTER_PORT_NUMBER, AM2320_TEMPERATURE_START_REGISTER);
+        vTaskDelay(10 / portTICK_RATE_MS);
+        AM2320_read(CONFIG_I2C_MASTER_PORT_NUMBER, upper_bits_buffer,
+                    lower_bits_buffer, dump_buffer, DATA_LENGTH);
+        
+        *buffer = *upper_bits_buffer;
+        *buffer <<= 8;
+        *buffer |= *lower_bits_buffer;
+
+        printf("Temperature: %f \n", (float)*buffer/10.0f);
+    }
+    else if (value == 1)
+    { 
+        AM2320_wake_sensor(CONFIG_I2C_MASTER_PORT_NUMBER);
+        vTaskDelay(10 / portTICK_RATE_MS);
+        AM2320_request(CONFIG_I2C_MASTER_PORT_NUMBER, AM2320_HUMIDITY_START_REGISTER);
+        vTaskDelay(10 / portTICK_RATE_MS);
+        AM2320_read(CONFIG_I2C_MASTER_PORT_NUMBER, upper_bits_buffer,
+                    lower_bits_buffer, dump_buffer, DATA_LENGTH);
+        
+        *buffer = *upper_bits_buffer;
+        *buffer <<= 8;
+        *buffer |= *lower_bits_buffer;
+
+        printf("Humidity: %f \n", (float)*buffer/10.0f);
+    }
+    
+}
+
+void AM2320_handle_sensor(void * pvParameters)
 {
-    vTaskDelay(3000 / portTICK_RATE_MS);
-    uint16_t  humidity_read;
-    int16_t temperature_read;
-    uint8_t dump_buffer;
-    //uint16_t * humidity_read = (uint16_t *)malloc(DATA_LENGTH);
-    //int16_t * temperature_read = (int16_t *)malloc(DATA_LENGTH);
-    //uint8_t * dump_buffer = (uint8_t *)malloc(8);
+    vTaskDelay(1000 / portTICK_RATE_MS);
+    
+    uint8_t * humidity_read_upper_bits = (uint8_t *)malloc(DATA_LENGTH);
+    uint8_t * humidity_read_lower_bits = (uint8_t *)malloc(DATA_LENGTH);
+    uint16_t * humidity_read = (uint16_t *)malloc(DATA_LENGTH);
+    uint8_t * temperature_read_upper_bits = (uint8_t *)malloc(DATA_LENGTH);
+    uint8_t * temperature_read_lower_bits = (uint8_t *)malloc(DATA_LENGTH);
+    uint16_t * temperature_read = (uint16_t *)malloc(DATA_LENGTH);    
+    uint8_t * dump_buffer = (uint8_t *)malloc(DATA_LENGTH);
+    
+    *humidity_read = 0;
+    *temperature_read = 0;
+    *dump_buffer = 0;
+    
     while (1)
     {
-        /*if (AM2320_request_humidity_and_temperature_values(CONFIG_I2C_MASTER_PORT_NUMBER) == ESP_OK)
-        {
-            vTaskDelay(2000 / portTICK_RATE_MS);
-            if (AM2320_receive_humidity_and_temperature_values(CONFIG_I2C_MASTER_PORT_NUMBER, humidity_read, temperature_read, dump_buffer, DATA_LENGTH) = ESP_OK)
-            {
-                printf("Humidity %f \n", (float)*humidity_read/10.0f);
-                printf("Temperature %f \n", (float)*temperature_read/10.0f);
-            }
-        }
-        else
-        {
-            printf("AM2320 sensor read failed");
-        }*/
         xSemaphoreTake(mutex, portMAX_DELAY);
-        AM2320_wake_sensor(CONFIG_I2C_MASTER_PORT_NUMBER); 
-        AM2320_request_humidity_and_temperature_values(CONFIG_I2C_MASTER_PORT_NUMBER);
-        vTaskDelay(2000 / portTICK_RATE_MS);
-        AM2320_receive_humidity_and_temperature_values(CONFIG_I2C_MASTER_PORT_NUMBER, &humidity_read, &temperature_read, &dump_buffer, DATA_LENGTH);
-        xSemaphoreGive(mutex);
-        printf("Humidity %f \n", (float)humidity_read/10.0f);
-        printf("Temperature %f \n", (float)temperature_read/10.0f);
+        readSensor(0, temperature_read, temperature_read_upper_bits, temperature_read_lower_bits, dump_buffer);
+        readSensor(1, humidity_read, humidity_read_upper_bits, humidity_read_lower_bits, dump_buffer);
+        xSemaphoreGive(mutex); 
         vTaskDelay(2000 / portTICK_RATE_MS);
     }
 }
@@ -129,6 +155,6 @@ void app_main()
 {
     mutex = xSemaphoreCreateMutex();
     ESP_ERROR_CHECK(i2c_master_init());
-    xTaskCreate(read_am2320_sensor, "Read AM2320 sensor", 1024 * 12, NULL, 10, NULL);
+    xTaskCreate(AM2320_handle_sensor, "Read AM2320 sensor", 1024 * 6, NULL, 10, NULL);
     vTaskSuspend(NULL);
 }
