@@ -21,7 +21,7 @@ menu "Configuration"
 
         config I2C_MASTER_FREQUENCY_IN_HZ
             int "Master Frequency"
-            default 20000
+            default 100000
             help
                 I2C Speed of device.
 
@@ -45,4 +45,20 @@ menu "Configuration"
 
     endmenu
 
+    menu "MQ5"
+    
+        config MQ5_DIGITAL_PIN
+            int "MQ5 digital pin"
+            default 26
+            help
+                MQ5 digital pin.
+        
+        config MQ5_ANALOG_PIN
+            int "MQ5 analog pin"
+            default 27
+            help
+                MQ5 analog pin.
+    
+    endmenu
+    
 endmenu

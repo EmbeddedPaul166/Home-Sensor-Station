@@ -3,6 +3,8 @@
 #include "freertos/task.h"
 #include "freertos/semphr.h"
 #include "freertos/queue.h"
+#include "driver/gpio.h"
+#include "driver/adc.h"
 #include "driver/i2c.h"
 #include "sdkconfig.h"
 
@@ -18,6 +20,10 @@
 #define AM2320_HUMIDITY_START_REGISTER 0x00
 #define AM2320_TEMPERATURE_START_REGISTER 0x02
 #define AM2320_NUMBER_OF_REGISTERS_TO_READ 0x02
+
+#define MQ5_DIGITAL_PIN CONFIG_MQ5_DIGITAL_PIN
+#define MQ5_ANALOG_PIN CONFIG_MQ5_ANALOG_PIN
+#define MQ5_GPIO_OUTPUT_PIN_SELECT  (1ULL<<MQ5_DIGITAL_PIN)
 
 SemaphoreHandle_t mutex;
 
@@ -38,7 +44,7 @@ static esp_err_t i2c_master_init()
                               CONFIG_I2C_MASTER_TX_BUFFER_DISABLE, 0); 
 }
 
-static esp_err_t AM2320_wake_sensor(i2c_port_t i2c_port_number)
+static esp_err_t AM2320_wake(i2c_port_t i2c_port_number)
 {
     //Wake sensor
     esp_err_t ret;
@@ -93,7 +99,7 @@ void readSensor(uint8_t value, uint16_t * buffer, uint8_t * lower_bits_buffer,
 { 
     if (value == 0)
     {    
-        AM2320_wake_sensor(CONFIG_I2C_MASTER_PORT_NUMBER);
+        AM2320_wake(CONFIG_I2C_MASTER_PORT_NUMBER);
         vTaskDelay(10 / portTICK_RATE_MS);
         AM2320_request(CONFIG_I2C_MASTER_PORT_NUMBER, AM2320_TEMPERATURE_START_REGISTER);
         vTaskDelay(10 / portTICK_RATE_MS);
@@ -108,7 +114,7 @@ void readSensor(uint8_t value, uint16_t * buffer, uint8_t * lower_bits_buffer,
     }
     else if (value == 1)
     {   
-        AM2320_wake_sensor(CONFIG_I2C_MASTER_PORT_NUMBER);
+        AM2320_wake(CONFIG_I2C_MASTER_PORT_NUMBER);
         vTaskDelay(10 / portTICK_RATE_MS);
         AM2320_request(CONFIG_I2C_MASTER_PORT_NUMBER, AM2320_HUMIDITY_START_REGISTER);
         vTaskDelay(10 / portTICK_RATE_MS);
@@ -145,16 +151,58 @@ void AM2320_handle_sensor(void * pvParameters)
         xSemaphoreTake(mutex, portMAX_DELAY);
         readSensor(0, temperature_read, temperature_read_upper_bits, temperature_read_lower_bits, dump_buffer);
         readSensor(1, humidity_read, humidity_read_upper_bits, humidity_read_lower_bits, dump_buffer);
-        xSemaphoreGive(mutex); 
+        xSemaphoreGive(mutex);
         vTaskDelay(2000 / portTICK_RATE_MS);
     }
 }
 
+void MQ5_handle_sensor(void * pvParameters)
+{
+    
+    int32_t voltage_read;
+    int32_t maximum_voltage_read = 4096;
+    float gas_percentege;
+    while (1)
+    {
+        if (gpio_get_level(MQ5_DIGITAL_PIN))
+        {
+            printf("WARNING! GAS LEAKAGE DETECTED!\n"); 
+        }
+        else if (!gpio_get_level(MQ5_DIGITAL_PIN))
+        {
+           printf("Gas level fine \n"); 
+        }
+        
+        esp_err_t err = adc2_get_raw( ADC2_CHANNEL_7, ADC_WIDTH_BIT_12, &voltage_read);
+        gas_percentege = ((float)voltage_read/(float)maximum_voltage_read)*100.0f;
+        printf("Gas level percentege: %f %% \n", gas_percentege);
+        vTaskDelay(4000 / portTICK_RATE_MS);    
+    }
+}
+
+void GPIO_setup()
+{
+    //Setup GPIO
+    gpio_config_t io_conf;
+    io_conf.intr_type = GPIO_PIN_INTR_DISABLE;
+    io_conf.mode = GPIO_MODE_INPUT;
+    io_conf.pin_bit_mask = MQ5_GPIO_OUTPUT_PIN_SELECT;
+    io_conf.pull_down_en = 0;
+    io_conf.pull_up_en = 0;
+    gpio_config(&io_conf);
+
+    //Setup ADC
+    adc1_config_channel_atten(ADC2_CHANNEL_7, ADC_ATTEN_0db);
+}
 
 void app_main()
 {
     mutex = xSemaphoreCreateMutex();
+    
+    GPIO_setup();
     ESP_ERROR_CHECK(i2c_master_init());
-    xTaskCreate(AM2320_handle_sensor, "Read AM2320 sensor", 1024 * 6, NULL, 10, NULL);
+
+    xTaskCreate(AM2320_handle_sensor, "Read AM2320 sensor", 1024 * 6, NULL, 12, NULL);
+    xTaskCreate(MQ5_handle_sensor, "Read MQ5 sensor", 1024 * 6, NULL, 10, NULL);
     vTaskSuspend(NULL);
 }
