@@ -1,4 +1,5 @@
 #include <stdio.h>
+#include <stdbool.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/semphr.h"
@@ -28,8 +29,15 @@
 
 #define GPIO_PIN_SELECT  ((1ULL << MQ5_DIGITAL_PIN) | (1ULL << PIR_DIGITAL_PIN))
 
-
 SemaphoreHandle_t mutex;
+
+//Queues to pass the sensors data
+QueueHandle_t temperature_queue;
+QueueHandle_t humidity_queue;
+QueueHandle_t gas_detection_queue;
+QueueHandle_t gas_percentege_queue;
+QueueHandle_t movement_detection_queue;
+
 
 static esp_err_t hardware_setup()
 {
@@ -124,7 +132,9 @@ static esp_err_t AM2320_read(i2c_port_t i2c_port_number, uint8_t *upper_bits_buf
 
 void readSensor(uint8_t value, uint16_t * buffer, uint8_t * lower_bits_buffer,
                 uint8_t * upper_bits_buffer, uint8_t * dump_buffer)
-{ 
+{
+    float temperature;
+    float humidity;
     if (value == 0)
     {    
         AM2320_wake(CONFIG_I2C_MASTER_PORT_NUMBER);
@@ -137,8 +147,9 @@ void readSensor(uint8_t value, uint16_t * buffer, uint8_t * lower_bits_buffer,
         *buffer = *upper_bits_buffer;
         *buffer <<= 8;
         *buffer |= *lower_bits_buffer;
-
-        printf("Temperature: %.1f ° \n", (float)((int16_t)*buffer)/10.0f);
+        
+        temperature = (float)((int16_t)*buffer)/10.0f;
+        xQueueSend(temperature_queue, &temperature, portMAX_DELAY);
     }
     else if (value == 1)
     {   
@@ -153,7 +164,8 @@ void readSensor(uint8_t value, uint16_t * buffer, uint8_t * lower_bits_buffer,
         *buffer <<= 8;
         *buffer |= *lower_bits_buffer;
         
-        printf("Humidity: %.1f %%\n", (float)*buffer/10.0f);
+        humidity = (float)*buffer/10.0f;
+        xQueueSend(humidity_queue, &humidity, portMAX_DELAY);
     }
     
 }
@@ -186,24 +198,29 @@ void AM2320_handle_sensor(void * pvParameters)
 
 void MQ5_handle_sensor(void * pvParameters)
 {
-    int32_t voltage_read;
+    vTaskDelay(2000 / portTICK_RATE_MS);
+    
+    int32_t voltage_read = 0;
     int32_t maximum_voltage_read = 4096;
-    float gas_percentege;
+    float gas_percentege = 0.0f;
+    bool gas_detection = false;
     
     while (1)
     {
         if (gpio_get_level(MQ5_DIGITAL_PIN))
         {
-            printf("WARNING! GAS LEAKAGE DETECTED!\n"); 
+            gas_detection = true;
+            xQueueSend(gas_detection_queue, &gas_detection, portMAX_DELAY);
         }
         else if (!gpio_get_level(MQ5_DIGITAL_PIN))
         {
-           printf("Gas level fine \n"); 
+            gas_detection = false;
+            xQueueSend(gas_detection_queue, &gas_detection, portMAX_DELAY);
         }
         
-        esp_err_t err = adc2_get_raw( ADC2_CHANNEL_7, ADC_WIDTH_BIT_12, &voltage_read);
+        adc2_get_raw( ADC2_CHANNEL_7, ADC_WIDTH_BIT_12, &voltage_read);
         gas_percentege = ((float)voltage_read/(float)maximum_voltage_read)*100.0f;
-        printf("Gas level percentege: %f %% \n", gas_percentege);
+        xQueueSend(gas_percentege_queue, &gas_percentege, portMAX_DELAY);
         vTaskDelay(1000 / portTICK_RATE_MS);    
     }
 }
@@ -212,30 +229,83 @@ void PIR_handle_sensor(void * pvParameters)
 {
     vTaskDelay(2000 / portTICK_RATE_MS);
     
+    bool movement_detection = false;
+    
     while (1)
     {
         if (!gpio_get_level(PIR_DIGITAL_PIN))
         {
-            printf("No movement detected \n");
+            movement_detection = true;
+            xQueueSend(movement_detection_queue, &movement_detection, portMAX_DELAY);
         }
         else if (gpio_get_level(PIR_DIGITAL_PIN))
         {
-            printf("Movement detected \n");
+            movement_detection = false;
+            xQueueSend(movement_detection_queue, &movement_detection, portMAX_DELAY);
         }
         vTaskDelay(1000 / portTICK_RATE_MS);
     }
 }
 
-
+void print_sensor_data(void * pvParameters)
+{
+    vTaskDelay(4000 / portTICK_RATE_MS);
+    
+    float temperature = 0.0f;
+    float humidity = 0.0f;
+    bool gas_detection = false;
+    float gas_percentege = 0.0f;
+    bool movement_detection = false;
+    
+    while (1)
+    {
+        xQueueReceive(temperature_queue, &temperature, portMAX_DELAY);
+        xQueueReceive(humidity_queue, &humidity, portMAX_DELAY);
+        xQueueReceive(gas_detection_queue, &gas_detection, portMAX_DELAY);
+        xQueueReceive(gas_percentege_queue, &gas_percentege, portMAX_DELAY);
+        xQueueReceive(movement_detection_queue, &movement_detection, portMAX_DELAY);
+        
+        if (gas_detection)
+        {
+            printf("WARNING! GAS LEAKAGE DETECTED!\n");
+        }
+        else if (!gas_detection)
+        {
+            printf("Gas level fine \n");
+        }
+        if (movement_detection)
+        {
+            printf("Movement detected \n");
+        }
+        else if (!movement_detection)
+        {
+            printf("No movement detected \n");
+        }
+        printf("Temperature: %.1f ° \n", temperature);
+        printf("Humidity: %.1f %% \n", humidity);
+        printf("Gas percentege: %.1f %% \n", gas_percentege);
+        printf("\n");
+        vTaskDelay(3000 / portTICK_RATE_MS);    
+    }
+}
 
 void app_main()
 {
+    printf("\n");
+    
     ESP_ERROR_CHECK(hardware_setup());
 
     mutex = xSemaphoreCreateMutex();
-    
-    xTaskCreate(AM2320_handle_sensor, "Read AM2320 sensor", 1024 * 6, NULL, 12, NULL);
-    xTaskCreate(MQ5_handle_sensor, "Read MQ5 sensor", 1024 * 6, NULL, 10, NULL);
-    xTaskCreate(PIR_handle_sensor, "Read PIR sensor", 1024 * 6, NULL, 10, NULL);
+
+    temperature_queue = xQueueCreate(3, sizeof(float));
+    humidity_queue = xQueueCreate(3, sizeof(float));
+    gas_detection_queue = xQueueCreate(1, sizeof(bool));
+    gas_percentege_queue = xQueueCreate(3, sizeof(float));
+    movement_detection_queue = xQueueCreate(1, sizeof(bool));
+
+    xTaskCreatePinnedToCore(AM2320_handle_sensor, "Read AM2320 sensor", 1024 * 6, NULL, 12, NULL, 0);
+    xTaskCreatePinnedToCore(MQ5_handle_sensor, "Read MQ5 sensor", 1024 * 6, NULL, 11, NULL, 0);
+    xTaskCreatePinnedToCore(PIR_handle_sensor, "Read PIR sensor", 1024 * 6, NULL, 10, NULL, 0);
+    xTaskCreatePinnedToCore(print_sensor_data, "Print sensor data", 1024 * 6, NULL, 9, NULL, 0);
     vTaskSuspend(NULL);
 }
