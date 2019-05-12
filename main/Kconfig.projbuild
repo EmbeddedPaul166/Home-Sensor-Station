@@ -1,6 +1,7 @@
 menu "Configuration"
 
     menu "I2C"
+
         config I2C_MASTER_SCL
             int "Master SCL GPIO Number"
             default 22
@@ -60,5 +61,15 @@ menu "Configuration"
                 MQ5 analog pin.
     
     endmenu
+
+    menu "PIR"
     
+        config PIR_DIGITAL_PIN
+            int "PIR digital pin"
+            default 32
+            help
+                PIR digital pin.
+        
+    endmenu
+
 endmenu

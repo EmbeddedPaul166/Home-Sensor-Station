@@ -23,7 +23,11 @@
 
 #define MQ5_DIGITAL_PIN CONFIG_MQ5_DIGITAL_PIN
 #define MQ5_ANALOG_PIN CONFIG_MQ5_ANALOG_PIN
-#define MQ5_GPIO_OUTPUT_PIN_SELECT  (1ULL<<MQ5_DIGITAL_PIN)
+
+#define PIR_DIGITAL_PIN CONFIG_PIR_DIGITAL_PIN
+
+#define GPIO_PIN_SELECT  ((1ULL << MQ5_DIGITAL_PIN) | (1ULL << PIR_DIGITAL_PIN))
+
 
 SemaphoreHandle_t mutex;
 
@@ -35,7 +39,7 @@ static esp_err_t hardware_setup()
     gpio_config_t io_conf;
     io_conf.intr_type = GPIO_PIN_INTR_DISABLE;
     io_conf.mode = GPIO_MODE_INPUT;
-    io_conf.pin_bit_mask = MQ5_GPIO_OUTPUT_PIN_SELECT;
+    io_conf.pin_bit_mask = GPIO_PIN_SELECT;
     io_conf.pull_down_en = 0;
     io_conf.pull_up_en = 0;
     error_code = gpio_config(&io_conf);
@@ -182,10 +186,10 @@ void AM2320_handle_sensor(void * pvParameters)
 
 void MQ5_handle_sensor(void * pvParameters)
 {
-    
     int32_t voltage_read;
     int32_t maximum_voltage_read = 4096;
     float gas_percentege;
+    
     while (1)
     {
         if (gpio_get_level(MQ5_DIGITAL_PIN))
@@ -200,9 +204,29 @@ void MQ5_handle_sensor(void * pvParameters)
         esp_err_t err = adc2_get_raw( ADC2_CHANNEL_7, ADC_WIDTH_BIT_12, &voltage_read);
         gas_percentege = ((float)voltage_read/(float)maximum_voltage_read)*100.0f;
         printf("Gas level percentege: %f %% \n", gas_percentege);
-        vTaskDelay(4000 / portTICK_RATE_MS);    
+        vTaskDelay(1000 / portTICK_RATE_MS);    
     }
 }
+
+void PIR_handle_sensor(void * pvParameters)
+{
+    vTaskDelay(2000 / portTICK_RATE_MS);
+    
+    while (1)
+    {
+        if (!gpio_get_level(PIR_DIGITAL_PIN))
+        {
+            printf("No movement detected \n");
+        }
+        else if (gpio_get_level(PIR_DIGITAL_PIN))
+        {
+            printf("Movement detected \n");
+        }
+        vTaskDelay(1000 / portTICK_RATE_MS);
+    }
+}
+
+
 
 void app_main()
 {
@@ -212,5 +236,6 @@ void app_main()
     
     xTaskCreate(AM2320_handle_sensor, "Read AM2320 sensor", 1024 * 6, NULL, 12, NULL);
     xTaskCreate(MQ5_handle_sensor, "Read MQ5 sensor", 1024 * 6, NULL, 10, NULL);
+    xTaskCreate(PIR_handle_sensor, "Read PIR sensor", 1024 * 6, NULL, 10, NULL);
     vTaskSuspend(NULL);
 }
