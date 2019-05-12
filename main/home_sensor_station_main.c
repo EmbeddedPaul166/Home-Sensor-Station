@@ -27,9 +27,33 @@
 
 SemaphoreHandle_t mutex;
 
-static esp_err_t i2c_master_init()
+static esp_err_t hardware_setup()
 {
-    //Initialize I2C
+    esp_err_t error_code;
+    
+    //Setup GPIO
+    gpio_config_t io_conf;
+    io_conf.intr_type = GPIO_PIN_INTR_DISABLE;
+    io_conf.mode = GPIO_MODE_INPUT;
+    io_conf.pin_bit_mask = MQ5_GPIO_OUTPUT_PIN_SELECT;
+    io_conf.pull_down_en = 0;
+    io_conf.pull_up_en = 0;
+    error_code = gpio_config(&io_conf);
+    if (error_code != ESP_OK)
+    {
+        printf("GPIO setup error \n");
+        return error_code;
+    }
+
+    //Setup ADC
+    error_code = adc2_config_channel_atten(ADC2_CHANNEL_7, ADC_ATTEN_0db); 
+    if (error_code != ESP_OK)
+    {
+        printf("ADC setup error \n");
+        return error_code;
+    }
+    
+    //Setup I2C
     int i2c_master_port = CONFIG_I2C_MASTER_PORT_NUMBER;
     i2c_config_t config;
     config.mode = I2C_MODE_MASTER;
@@ -41,7 +65,7 @@ static esp_err_t i2c_master_init()
     i2c_param_config(i2c_master_port, &config);
     return i2c_driver_install(i2c_master_port, config.mode,
                               CONFIG_I2C_MASTER_RX_BUFFER_DISABLE,
-                              CONFIG_I2C_MASTER_TX_BUFFER_DISABLE, 0); 
+                              CONFIG_I2C_MASTER_TX_BUFFER_DISABLE, 0);
 }
 
 static esp_err_t AM2320_wake(i2c_port_t i2c_port_number)
@@ -180,28 +204,12 @@ void MQ5_handle_sensor(void * pvParameters)
     }
 }
 
-void GPIO_setup()
-{
-    //Setup GPIO
-    gpio_config_t io_conf;
-    io_conf.intr_type = GPIO_PIN_INTR_DISABLE;
-    io_conf.mode = GPIO_MODE_INPUT;
-    io_conf.pin_bit_mask = MQ5_GPIO_OUTPUT_PIN_SELECT;
-    io_conf.pull_down_en = 0;
-    io_conf.pull_up_en = 0;
-    gpio_config(&io_conf);
-
-    //Setup ADC
-    adc1_config_channel_atten(ADC2_CHANNEL_7, ADC_ATTEN_0db);
-}
-
 void app_main()
 {
+    ESP_ERROR_CHECK(hardware_setup());
+
     mutex = xSemaphoreCreateMutex();
     
-    GPIO_setup();
-    ESP_ERROR_CHECK(i2c_master_init());
-
     xTaskCreate(AM2320_handle_sensor, "Read AM2320 sensor", 1024 * 6, NULL, 12, NULL);
     xTaskCreate(MQ5_handle_sensor, "Read MQ5 sensor", 1024 * 6, NULL, 10, NULL);
     vTaskSuspend(NULL);
