@@ -27,7 +27,12 @@
 
 #define PIR_DIGITAL_PIN CONFIG_PIR_DIGITAL_PIN
 
+#define PIR_POWER_PIN 12
+#define MQ5_POWER_PIN 14
+
 #define GPIO_PIN_SELECT  ((1ULL << MQ5_DIGITAL_PIN) | (1ULL << PIR_DIGITAL_PIN))
+
+#define GPIO_PIN_SELECT_POWER_SOURCE  ((1ULL << MQ5_POWER_PIN) | (1ULL << PIR_POWER_PIN)) 
 
 SemaphoreHandle_t mutex;
 
@@ -39,30 +44,40 @@ QueueHandle_t gas_percentege_queue;
 QueueHandle_t movement_detection_queue;
 
 
-static esp_err_t hardware_setup()
+static void hardware_setup()
 {
     esp_err_t error_code;
     
-    //Setup GPIO
+    //Setup sensors GPIO
     gpio_config_t io_conf;
     io_conf.intr_type = GPIO_PIN_INTR_DISABLE;
     io_conf.mode = GPIO_MODE_INPUT;
     io_conf.pin_bit_mask = GPIO_PIN_SELECT;
-    io_conf.pull_down_en = 0;
-    io_conf.pull_up_en = 0;
     error_code = gpio_config(&io_conf);
     if (error_code != ESP_OK)
     {
-        printf("GPIO setup error \n");
-        return error_code;
+        printf("Sensor GPIO setup error \n");
     }
+    
+    //Setup power source GPIO for MQ5 and PIR sensors
+    io_conf.intr_type = GPIO_PIN_INTR_DISABLE;
+    io_conf.mode = GPIO_MODE_OUTPUT;
+    io_conf.pin_bit_mask = GPIO_PIN_SELECT_POWER_SOURCE;
+    io_conf.pull_up_en = 1;
+    error_code = gpio_config(&io_conf);
+    if (error_code != ESP_OK)
+    {
+        printf("Power source GPIO setup error \n");
+    }
+    
+    gpio_set_level(MQ5_POWER_PIN, 1);
+    gpio_set_level(PIR_POWER_PIN, 1);
 
     //Setup ADC
     error_code = adc2_config_channel_atten(ADC2_CHANNEL_7, ADC_ATTEN_0db); 
     if (error_code != ESP_OK)
     {
         printf("ADC setup error \n");
-        return error_code;
     }
     
     //Setup I2C
@@ -75,9 +90,13 @@ static esp_err_t hardware_setup()
     config.scl_pullup_en = GPIO_PULLUP_ENABLE;
     config.master.clk_speed = CONFIG_I2C_MASTER_FREQUENCY_IN_HZ;
     i2c_param_config(i2c_master_port, &config);
-    return i2c_driver_install(i2c_master_port, config.mode,
+    error_code = i2c_driver_install(i2c_master_port, config.mode,
                               CONFIG_I2C_MASTER_RX_BUFFER_DISABLE,
                               CONFIG_I2C_MASTER_TX_BUFFER_DISABLE, 0);
+    if (error_code != ESP_OK)
+    {
+        printf("I2C setup error \n");
+    }
 }
 
 static esp_err_t AM2320_wake(i2c_port_t i2c_port_number)
@@ -219,8 +238,8 @@ void MQ5_handle_sensor(void * pvParameters)
         }
         
         adc2_get_raw( ADC2_CHANNEL_7, ADC_WIDTH_BIT_12, &voltage_read);
-        gas_percentege = ((float)voltage_read/(float)maximum_voltage_read)*100.0f;
-        xQueueSend(gas_percentege_queue, &gas_percentege, portMAX_DELAY);
+        //gas_percentege = ((float)voltage_read/(float)maximum_voltage_read)*100.0f;
+        xQueueSend(gas_percentege_queue, &voltage_read, portMAX_DELAY);
         vTaskDelay(1000 / portTICK_RATE_MS);    
     }
 }
@@ -243,7 +262,7 @@ void PIR_handle_sensor(void * pvParameters)
             movement_detection = false;
             xQueueSend(movement_detection_queue, &movement_detection, portMAX_DELAY);
         }
-        vTaskDelay(1000 / portTICK_RATE_MS);
+        vTaskDelay(2000 / portTICK_RATE_MS);
     }
 }
 
@@ -283,7 +302,7 @@ void print_sensor_data(void * pvParameters)
         }
         printf("Temperature: %.1f ° \n", temperature);
         printf("Humidity: %.1f %% \n", humidity);
-        printf("Gas percentege: %.1f %% \n", gas_percentege);
+        printf("Gas level: %.1f  \n", gas_percentege);
         printf("\n");
         vTaskDelay(3000 / portTICK_RATE_MS);    
     }
@@ -293,7 +312,7 @@ void app_main()
 {
     printf("\n");
     
-    ESP_ERROR_CHECK(hardware_setup());
+    hardware_setup();
 
     mutex = xSemaphoreCreateMutex();
 
