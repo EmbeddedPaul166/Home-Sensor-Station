@@ -4,10 +4,25 @@
 #include "freertos/task.h"
 #include "freertos/semphr.h"
 #include "freertos/queue.h"
+#include "freertos/event_groups.h"
 #include "driver/gpio.h"
 #include "driver/adc.h"
 #include "driver/i2c.h"
 #include "sdkconfig.h"
+#include "esp_wifi.h"
+#include "esp_event.h"
+#include "esp_log.h"
+#include "esp_system.h"
+#include "nvs_flash.h"
+#include "sys/param.h"
+#include "nvs_flash.h"
+#include "tcpip_adapter.h"
+#include "esp_eth.h"
+//#include "protocol_examples_common.h"
+#include "esp_http_server.h"
+#include "lwip/err.h"
+#include "lwip/sys.h"
+
 
 
 #define DATA_LENGTH 16
@@ -43,6 +58,200 @@ QueueHandle_t gas_detection_queue;
 QueueHandle_t gas_percentege_queue;
 QueueHandle_t movement_detection_queue;
 
+static const char *TAG = "Read_Sensors_Data";
+
+static EventGroupHandle_t s_wifi_event_group;
+
+const int WIFI_CONNECTED_BIT = BIT0;
+
+static int s_retry_num = 0;
+
+static void event_handler(void* arg, esp_event_base_t event_base,
+                                int32_t event_id, void* event_data)
+{
+    if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_START)
+    {
+        esp_wifi_connect();
+    }
+    else if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_DISCONNECTED)
+    {
+        if (s_retry_num < CONFIG_ESP_WIFI_MAXIMUM_RETRY)
+        {
+            esp_wifi_connect();
+            xEventGroupClearBits(s_wifi_event_group, WIFI_CONNECTED_BIT);
+            s_retry_num++;
+            ESP_LOGI(TAG, "retry to connect to the AP");
+        }
+        ESP_LOGI(TAG,"connect to the AP fail");
+    }
+    else if (event_base == IP_EVENT && event_id == IP_EVENT_STA_GOT_IP)
+    {
+        ip_event_got_ip_t* event = (ip_event_got_ip_t*) event_data;
+        ESP_LOGI(TAG, "got ip:%s",
+                 ip4addr_ntoa(&event->ip_info.ip));
+        s_retry_num = 0;
+        xEventGroupSetBits(s_wifi_event_group, WIFI_CONNECTED_BIT);
+    }
+}
+
+static esp_err_t get_handler(httpd_req_t *req)
+{
+    char*  buf;
+    size_t buf_len;
+
+    buf_len = httpd_req_get_hdr_value_len(req, "Host") + 1;
+    if (buf_len > 1)
+    {
+        buf = malloc(buf_len);
+        if (httpd_req_get_hdr_value_str(req, "Host", buf, buf_len) == ESP_OK)
+        {
+            ESP_LOGI(TAG, "Found header => Host: %s", buf);
+        }
+        free(buf);
+    }
+
+    buf_len = httpd_req_get_hdr_value_len(req, "Test-Header-2") + 1;
+    if (buf_len > 1)
+    {
+        buf = malloc(buf_len);
+        if (httpd_req_get_hdr_value_str(req, "Test-Header-2", buf, buf_len) == ESP_OK) {
+            ESP_LOGI(TAG, "Found header => Test-Header-2: %s", buf);
+        }
+        free(buf);
+    }
+
+    buf_len = httpd_req_get_hdr_value_len(req, "Test-Header-1") + 1;
+    if (buf_len > 1)
+    {
+        buf = malloc(buf_len);
+        if (httpd_req_get_hdr_value_str(req, "Test-Header-1", buf, buf_len) == ESP_OK)
+        {
+            ESP_LOGI(TAG, "Found header => Test-Header-1: %s", buf);
+        }
+        free(buf);
+    }
+
+    buf_len = httpd_req_get_url_query_len(req) + 1;
+    if (buf_len > 1)
+    {
+        buf = malloc(buf_len);
+        if (httpd_req_get_url_query_str(req, buf, buf_len) == ESP_OK)
+        {
+            ESP_LOGI(TAG, "Found URL query => %s", buf);
+            char param[32];
+            if (httpd_query_key_value(buf, "query1", param, sizeof(param)) == ESP_OK)
+            {
+                ESP_LOGI(TAG, "Found URL query parameter => query1=%s", param);
+            }
+            if (httpd_query_key_value(buf, "query3", param, sizeof(param)) == ESP_OK)
+            {
+                ESP_LOGI(TAG, "Found URL query parameter => query3=%s", param);
+            }
+            if (httpd_query_key_value(buf, "query2", param, sizeof(param)) == ESP_OK)
+            {
+                ESP_LOGI(TAG, "Found URL query parameter => query2=%s", param);
+            }
+        }
+        free(buf);
+    }
+
+    httpd_resp_set_hdr(req, "Custom-Header-1", "Custom-Value-1");
+    httpd_resp_set_hdr(req, "Custom-Header-2", "Custom-Value-2");
+
+    const char* resp_str = (const char*) req->user_ctx;
+    httpd_resp_send(req, resp_str, strlen(resp_str));
+
+    if (httpd_req_get_hdr_value_len(req, "Host") == 0)
+    {
+        ESP_LOGI(TAG, "Request headers lost");
+    }
+    return ESP_OK;
+}
+
+static const httpd_uri_t sensors_data =
+{
+    .uri       = "/sensors_data",
+    .method    = HTTP_GET,
+    .handler   = get_handler,
+    .user_ctx  = "Hello World!"
+};
+
+static httpd_handle_t start_webserver(void)
+{
+    httpd_handle_t server = NULL;
+    
+    httpd_config_t config = 
+    {
+        .task_priority      = 12,       
+        .stack_size         = 4096,                     
+        .core_id            = 1,           
+        .server_port        = 80,                       
+        .ctrl_port          = 32768,                    
+        .max_open_sockets   = 7,                        
+        .max_uri_handlers   = 8,                        
+        .max_resp_headers   = 8,                        
+        .backlog_conn       = 5,                       
+        .lru_purge_enable   = false,                    
+        .recv_wait_timeout  = 5,                        
+        .send_wait_timeout  = 5,                        
+        .global_user_ctx = NULL,                        
+        .global_user_ctx_free_fn = NULL,                
+        .global_transport_ctx = NULL,                   
+        .global_transport_ctx_free_fn = NULL,           
+        .open_fn = NULL,                                
+        .close_fn = NULL,                               
+        .uri_match_fn = NULL                            
+    };
+
+    ESP_LOGI(TAG, "Starting server on port: '%d'", config.server_port);
+    if (httpd_start(&server, &config) == ESP_OK)
+    {
+        ESP_LOGI(TAG, "Registering URI handlers");
+        httpd_register_uri_handler(server, &sensors_data);
+        return server;
+    }
+
+    ESP_LOGI(TAG, "Error starting server!");
+    return NULL;
+}
+
+
+
+void setup_server()
+{
+    //static httpd_handle_t server = NULL;
+    ESP_ERROR_CHECK(nvs_flash_init());
+    
+    s_wifi_event_group = xEventGroupCreate();
+    
+    tcpip_adapter_init();
+    
+    ESP_ERROR_CHECK(esp_event_loop_create_default());
+
+    wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
+    ESP_ERROR_CHECK(esp_wifi_init(&cfg));
+
+    ESP_ERROR_CHECK(esp_event_handler_register(WIFI_EVENT, ESP_EVENT_ANY_ID, &event_handler, NULL));
+    ESP_ERROR_CHECK(esp_event_handler_register(IP_EVENT, IP_EVENT_STA_GOT_IP, &event_handler, NULL));
+
+    wifi_config_t wifi_config =
+    {
+        .sta =
+        {
+            .ssid = CONFIG_ESP_WIFI_SSID,
+            .password = CONFIG_ESP_WIFI_PASSWORD
+        },
+    };
+    ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA) );
+    ESP_ERROR_CHECK(esp_wifi_set_config(ESP_IF_WIFI_STA, &wifi_config) );
+    ESP_ERROR_CHECK(esp_wifi_start() );
+
+    ESP_LOGI(TAG, "wifi_init_sta finished.");
+    ESP_LOGI(TAG, "connect to ap SSID:%s password:%s",
+             CONFIG_ESP_WIFI_SSID, CONFIG_ESP_WIFI_PASSWORD);    
+    
+    server = start_webserver();
+}
 
 static void hardware_setup()
 {
@@ -97,6 +306,48 @@ static void hardware_setup()
     {
         printf("I2C setup error \n");
     }
+
+    //Server setup
+    setup_server();
+}
+
+static void stop_webserver(httpd_handle_t server)
+{
+    httpd_stop(server);
+}
+
+static void disconnect_handler(void* arg, esp_event_base_t event_base,
+                               int32_t event_id, void* event_data)
+{
+    httpd_handle_t* server = (httpd_handle_t*) arg;
+    if (*server)
+    {
+        ESP_LOGI(TAG, "Stopping webserver");
+        stop_webserver(*server);
+        *server = NULL;
+    }
+}
+
+static void connect_handler(void* arg, esp_event_base_t event_base,
+                            int32_t event_id, void* event_data)
+{
+    httpd_handle_t* server = (httpd_handle_t*) arg;
+    if (*server == NULL)
+    {
+        ESP_LOGI(TAG, "Starting webserver");
+        *server = start_webserver();
+    }
+}
+
+esp_err_t http_404_error_handler(httpd_req_t *req, httpd_err_code_t err)
+{
+    if (strcmp("/sensors_data", req->uri) == 0)
+    {
+        httpd_resp_send_err(req, HTTPD_404_NOT_FOUND, "/hello URI is not available");
+        return ESP_OK;
+    }
+    httpd_resp_send_err(req, HTTPD_404_NOT_FOUND, "Some 404 error message");
+    return ESP_FAIL;
 }
 
 static esp_err_t AM2320_wake(i2c_port_t i2c_port_number)
@@ -220,8 +471,8 @@ void MQ5_handle_sensor(void * pvParameters)
     vTaskDelay(2000 / portTICK_RATE_MS);
     
     int32_t voltage_read = 0;
-    int32_t maximum_voltage_read = 4096;
-    float gas_percentege = 0.0f;
+    //int32_t maximum_voltage_read = 4096;
+    //float gas_percentege = 0.0f;
     bool gas_detection = false;
     
     while (1)

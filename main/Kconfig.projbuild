@@ -1,6 +1,6 @@
 menu "Configuration"
 
-    menu "I2C"
+    menu "AM2320-I2C"
 
         config I2C_MASTER_SCL
             int "Master SCL GPIO Number"
@@ -70,6 +70,28 @@ menu "Configuration"
             help
                 PIR digital pin.
         
+    endmenu
+    
+    menu "Wi-Fi"
+    
+        config ESP_WIFI_SSID
+            string "WiFi SSID"
+            default "ASUS"
+            help
+                SSID (network name) to connect to.
+
+        config ESP_WIFI_PASSWORD
+            string "WiFi Password"
+            default "0666066606660"
+            help
+                WiFi password (WPA or WPA2) to use.
+
+        config ESP_WIFI_MAXIMUM_RETRY
+            int "Maximum retry"
+            default 10
+            help
+                Set the Maximum retry to avoid station reconnecting to the AP unlimited when the AP is really inexistent.
+    
     endmenu
 
 endmenu
