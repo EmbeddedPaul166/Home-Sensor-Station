@@ -1,4 +1,5 @@
 #include <stdio.h>
+#include <string.h>
 #include <stdbool.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -18,7 +19,6 @@
 #include "nvs_flash.h"
 #include "tcpip_adapter.h"
 #include "esp_eth.h"
-//#include "protocol_examples_common.h"
 #include "esp_http_server.h"
 #include "lwip/err.h"
 #include "lwip/sys.h"
@@ -58,7 +58,9 @@ QueueHandle_t gas_detection_queue;
 QueueHandle_t gas_percentege_queue;
 QueueHandle_t movement_detection_queue;
 
-static const char *TAG = "Read_Sensors_Data";
+static char server_response[400] = "No data acquired. Try again.";
+
+static const char * TAG = "Read_Sensors_Data";
 
 static EventGroupHandle_t s_wifi_event_group;
 
@@ -66,114 +68,23 @@ const int WIFI_CONNECTED_BIT = BIT0;
 
 static int s_retry_num = 0;
 
-static void event_handler(void* arg, esp_event_base_t event_base,
-                                int32_t event_id, void* event_data)
-{
-    if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_START)
-    {
-        esp_wifi_connect();
-    }
-    else if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_DISCONNECTED)
-    {
-        if (s_retry_num < CONFIG_ESP_WIFI_MAXIMUM_RETRY)
-        {
-            esp_wifi_connect();
-            xEventGroupClearBits(s_wifi_event_group, WIFI_CONNECTED_BIT);
-            s_retry_num++;
-            ESP_LOGI(TAG, "retry to connect to the AP");
-        }
-        ESP_LOGI(TAG,"connect to the AP fail");
-    }
-    else if (event_base == IP_EVENT && event_id == IP_EVENT_STA_GOT_IP)
-    {
-        ip_event_got_ip_t* event = (ip_event_got_ip_t*) event_data;
-        ESP_LOGI(TAG, "got ip:%s",
-                 ip4addr_ntoa(&event->ip_info.ip));
-        s_retry_num = 0;
-        xEventGroupSetBits(s_wifi_event_group, WIFI_CONNECTED_BIT);
-    }
-}
-
 static esp_err_t get_handler(httpd_req_t *req)
 {
-    char*  buf;
-    size_t buf_len;
-
-    buf_len = httpd_req_get_hdr_value_len(req, "Host") + 1;
-    if (buf_len > 1)
-    {
-        buf = malloc(buf_len);
-        if (httpd_req_get_hdr_value_str(req, "Host", buf, buf_len) == ESP_OK)
-        {
-            ESP_LOGI(TAG, "Found header => Host: %s", buf);
-        }
-        free(buf);
-    }
-
-    buf_len = httpd_req_get_hdr_value_len(req, "Test-Header-2") + 1;
-    if (buf_len > 1)
-    {
-        buf = malloc(buf_len);
-        if (httpd_req_get_hdr_value_str(req, "Test-Header-2", buf, buf_len) == ESP_OK) {
-            ESP_LOGI(TAG, "Found header => Test-Header-2: %s", buf);
-        }
-        free(buf);
-    }
-
-    buf_len = httpd_req_get_hdr_value_len(req, "Test-Header-1") + 1;
-    if (buf_len > 1)
-    {
-        buf = malloc(buf_len);
-        if (httpd_req_get_hdr_value_str(req, "Test-Header-1", buf, buf_len) == ESP_OK)
-        {
-            ESP_LOGI(TAG, "Found header => Test-Header-1: %s", buf);
-        }
-        free(buf);
-    }
-
-    buf_len = httpd_req_get_url_query_len(req) + 1;
-    if (buf_len > 1)
-    {
-        buf = malloc(buf_len);
-        if (httpd_req_get_url_query_str(req, buf, buf_len) == ESP_OK)
-        {
-            ESP_LOGI(TAG, "Found URL query => %s", buf);
-            char param[32];
-            if (httpd_query_key_value(buf, "query1", param, sizeof(param)) == ESP_OK)
-            {
-                ESP_LOGI(TAG, "Found URL query parameter => query1=%s", param);
-            }
-            if (httpd_query_key_value(buf, "query3", param, sizeof(param)) == ESP_OK)
-            {
-                ESP_LOGI(TAG, "Found URL query parameter => query3=%s", param);
-            }
-            if (httpd_query_key_value(buf, "query2", param, sizeof(param)) == ESP_OK)
-            {
-                ESP_LOGI(TAG, "Found URL query parameter => query2=%s", param);
-            }
-        }
-        free(buf);
-    }
-
-    httpd_resp_set_hdr(req, "Custom-Header-1", "Custom-Value-1");
-    httpd_resp_set_hdr(req, "Custom-Header-2", "Custom-Value-2");
-
-    const char* resp_str = (const char*) req->user_ctx;
+    xSemaphoreTake(mutex, portMAX_DELAY);
+    char * resp_str = (char *) req->user_ctx;
+    xSemaphoreGive(mutex);
+    
     httpd_resp_send(req, resp_str, strlen(resp_str));
-
-    if (httpd_req_get_hdr_value_len(req, "Host") == 0)
-    {
-        ESP_LOGI(TAG, "Request headers lost");
-    }
+    
     return ESP_OK;
 }
 
 static const httpd_uri_t sensors_data =
 {
-    .uri       = "/sensors_data",
+    .uri       = "/sensors",
     .method    = HTTP_GET,
     .handler   = get_handler,
-    .user_ctx  = "Hello World!"
+    .user_ctx  = &server_response
 };
 
 static httpd_handle_t start_webserver(void)
@@ -183,7 +94,7 @@ static httpd_handle_t start_webserver(void)
     httpd_config_t config = 
     {
         .task_priority      = 12,       
-        .stack_size         = 4096,                     
+        .stack_size         = 1024*12,                     
         .core_id            = 1,           
         .server_port        = 80,                       
         .ctrl_port          = 32768,                    
@@ -215,11 +126,57 @@ static httpd_handle_t start_webserver(void)
     return NULL;
 }
 
+static void stop_webserver(httpd_handle_t server)
+{
+    httpd_stop(server);
+}
 
+static void event_handler(void* arg, esp_event_base_t event_base,
+                                int32_t event_id, void* event_data)
+{
+    if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_START)
+    {
+        esp_wifi_connect();
+    }
+    else if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_DISCONNECTED)
+    {
+        if (s_retry_num < CONFIG_ESP_WIFI_MAXIMUM_RETRY)
+        {
+            esp_wifi_connect();
+            xEventGroupClearBits(s_wifi_event_group, WIFI_CONNECTED_BIT);
+            s_retry_num++;
+            ESP_LOGI(TAG, "retry to connect to the AP");
+        }
+        ESP_LOGI(TAG,"connect to the AP fail");
+        
+        httpd_handle_t* server = (httpd_handle_t*) arg;
+        if (*server)
+        {
+            ESP_LOGI(TAG, "Stopping webserver");
+            stop_webserver(*server);
+            *server = NULL;
+        }
+    }
+    else if (event_base == IP_EVENT && event_id == IP_EVENT_STA_GOT_IP)
+    {
+        ip_event_got_ip_t* event = (ip_event_got_ip_t*) event_data;
+        ESP_LOGI(TAG, "got ip:%s",
+                 ip4addr_ntoa(&event->ip_info.ip));
+        s_retry_num = 0;
+        xEventGroupSetBits(s_wifi_event_group, WIFI_CONNECTED_BIT);
+        
+        httpd_handle_t* server = (httpd_handle_t*) arg;
+        if (*server == NULL)
+        {
+            ESP_LOGI(TAG, "Starting webserver");
+            *server = start_webserver();
+        }
+    }
+}
 
 void setup_server()
 {
-    //static httpd_handle_t server = NULL;
+    static httpd_handle_t server = NULL;
     ESP_ERROR_CHECK(nvs_flash_init());
     
     s_wifi_event_group = xEventGroupCreate();
@@ -231,9 +188,9 @@ void setup_server()
     wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
     ESP_ERROR_CHECK(esp_wifi_init(&cfg));
 
-    ESP_ERROR_CHECK(esp_event_handler_register(WIFI_EVENT, ESP_EVENT_ANY_ID, &event_handler, NULL));
-    ESP_ERROR_CHECK(esp_event_handler_register(IP_EVENT, IP_EVENT_STA_GOT_IP, &event_handler, NULL));
-
+    ESP_ERROR_CHECK(esp_event_handler_register(WIFI_EVENT, ESP_EVENT_ANY_ID, &event_handler, &server));
+    ESP_ERROR_CHECK(esp_event_handler_register(IP_EVENT, IP_EVENT_STA_GOT_IP, &event_handler, &server));
+    
     wifi_config_t wifi_config =
     {
         .sta =
@@ -311,39 +268,11 @@ static void hardware_setup()
     setup_server();
 }
 
-static void stop_webserver(httpd_handle_t server)
-{
-    httpd_stop(server);
-}
-
-static void disconnect_handler(void* arg, esp_event_base_t event_base,
-                               int32_t event_id, void* event_data)
-{
-    httpd_handle_t* server = (httpd_handle_t*) arg;
-    if (*server)
-    {
-        ESP_LOGI(TAG, "Stopping webserver");
-        stop_webserver(*server);
-        *server = NULL;
-    }
-}
-
-static void connect_handler(void* arg, esp_event_base_t event_base,
-                            int32_t event_id, void* event_data)
-{
-    httpd_handle_t* server = (httpd_handle_t*) arg;
-    if (*server == NULL)
-    {
-        ESP_LOGI(TAG, "Starting webserver");
-        *server = start_webserver();
-    }
-}
-
 esp_err_t http_404_error_handler(httpd_req_t *req, httpd_err_code_t err)
 {
-    if (strcmp("/sensors_data", req->uri) == 0)
+    if (strcmp("/sensors", req->uri) == 0)
     {
-        httpd_resp_send_err(req, HTTPD_404_NOT_FOUND, "/hello URI is not available");
+        httpd_resp_send_err(req, HTTPD_404_NOT_FOUND, "/sensors URI is not available");
         return ESP_OK;
     }
     httpd_resp_send_err(req, HTTPD_404_NOT_FOUND, "Some 404 error message");
@@ -458,10 +387,8 @@ void AM2320_handle_sensor(void * pvParameters)
     
     while (1)
     {
-        xSemaphoreTake(mutex, portMAX_DELAY);
         readSensor(0, temperature_read, temperature_read_upper_bits, temperature_read_lower_bits, dump_buffer);
         readSensor(1, humidity_read, humidity_read_upper_bits, humidity_read_lower_bits, dump_buffer);
-        xSemaphoreGive(mutex);
         vTaskDelay(2000 / portTICK_RATE_MS);
     }
 }
@@ -517,43 +444,59 @@ void PIR_handle_sensor(void * pvParameters)
     }
 }
 
-void print_sensor_data(void * pvParameters)
+void manage_sensor_data(void * pvParameters)
 {
     vTaskDelay(4000 / portTICK_RATE_MS);
     
-    float temperature = 0.0f;
-    float humidity = 0.0f;
+    float temperature = 0;
+    float humidity = 0;
     bool gas_detection = false;
-    float gas_percentege = 0.0f;
+    float gas_level = 0;
     bool movement_detection = false;
+    
+    char data_combined[200] = "";
+    char buffer[50] = "";
     
     while (1)
     {
         xQueueReceive(temperature_queue, &temperature, portMAX_DELAY);
         xQueueReceive(humidity_queue, &humidity, portMAX_DELAY);
         xQueueReceive(gas_detection_queue, &gas_detection, portMAX_DELAY);
-        xQueueReceive(gas_percentege_queue, &gas_percentege, portMAX_DELAY);
+        xQueueReceive(gas_percentege_queue, &gas_level, portMAX_DELAY);
         xQueueReceive(movement_detection_queue, &movement_detection, portMAX_DELAY);
+       
+        strcpy(data_combined, "");
         
         if (gas_detection)
         {
             printf("WARNING! GAS LEAKAGE DETECTED!\n");
+            strcat(data_combined, "WARNING! GAS LEAKAGE DETECTED, ");
         }
         else if (!gas_detection)
         {
             printf("Gas level fine \n");
+            strcat(data_combined, "Gas level fine, ");
         }
         if (movement_detection)
         {
             printf("Movement detected \n");
+            strcat(data_combined, "Movement detected, ");
         }
         else if (!movement_detection)
         {
             printf("No movement detected \n");
+            strcat(data_combined, "No movement detected, ");
         }
+        
+        sprintf(buffer, "Temperature: %.1f C, Humidity: %.1f %%, Gas level: %.1f", temperature, humidity, gas_level);
+        strcat(data_combined, buffer);
+        xSemaphoreTake(mutex, portMAX_DELAY);
+        strcpy(server_response, data_combined);
+        xSemaphoreGive(mutex);
+        
         printf("Temperature: %.1f ° \n", temperature);
         printf("Humidity: %.1f %% \n", humidity);
-        printf("Gas level: %.1f  \n", gas_percentege);
+        printf("Gas level: %.1f  \n", gas_level);
         printf("\n");
         vTaskDelay(3000 / portTICK_RATE_MS);    
     }
@@ -573,9 +516,9 @@ void app_main()
     gas_percentege_queue = xQueueCreate(3, sizeof(float));
     movement_detection_queue = xQueueCreate(1, sizeof(bool));
 
-    xTaskCreatePinnedToCore(AM2320_handle_sensor, "Read AM2320 sensor", 1024 * 6, NULL, 12, NULL, 0);
-    xTaskCreatePinnedToCore(MQ5_handle_sensor, "Read MQ5 sensor", 1024 * 6, NULL, 11, NULL, 0);
-    xTaskCreatePinnedToCore(PIR_handle_sensor, "Read PIR sensor", 1024 * 6, NULL, 10, NULL, 0);
-    xTaskCreatePinnedToCore(print_sensor_data, "Print sensor data", 1024 * 6, NULL, 9, NULL, 0);
+    xTaskCreatePinnedToCore(AM2320_handle_sensor, "Read AM2320 sensor", 1024 * 12, NULL, 12, NULL, 0);
+    xTaskCreatePinnedToCore(MQ5_handle_sensor, "Read MQ5 sensor", 1024 * 12, NULL, 11, NULL, 0);
+    xTaskCreatePinnedToCore(PIR_handle_sensor, "Read PIR sensor", 1024 * 12, NULL, 10, NULL, 0);
+    xTaskCreatePinnedToCore(manage_sensor_data, "Manage and print sensor data", 1024 * 32, NULL, 9, NULL, 0);
     vTaskSuspend(NULL);
 }
