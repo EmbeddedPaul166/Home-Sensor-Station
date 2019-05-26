@@ -94,7 +94,7 @@ static httpd_handle_t start_webserver(void)
     httpd_config_t config = 
     {
         .task_priority      = 12,       
-        .stack_size         = 1024*12,                     
+        .stack_size         = 1024*16,                     
         .core_id            = 1,           
         .server_port        = 80,                       
         .ctrl_port          = 32768,                    
@@ -454,8 +454,8 @@ void manage_sensor_data(void * pvParameters)
     float gas_level = 0;
     bool movement_detection = false;
     
-    char data_combined[200] = "";
-    char buffer[50] = "";
+    char data_combined[300] = "";
+    char buffer[100] = "";
     
     while (1)
     {
@@ -465,33 +465,39 @@ void manage_sensor_data(void * pvParameters)
         xQueueReceive(gas_percentege_queue, &gas_level, portMAX_DELAY);
         xQueueReceive(movement_detection_queue, &movement_detection, portMAX_DELAY);
        
-        strcpy(data_combined, "");
+        strcpy(data_combined, "<p align=\"middle\" style=\"color:black;font-size:100px;\">Sensors' data</p>");
+        
+        sprintf(buffer, "<p align=\"middle\" style=\"color:black;font-size:40px;\">Temperature: %.1f C </p> <p align=\"middle\" style=\"color:black;font-size:40px;\">Humidity: %.1f %% </p> <p align=\"middle\" style=\"color:black;font-size:40px;\">Gas level: %.1f </p>", temperature, humidity, gas_level);
+        
+        strcat(data_combined, buffer);
+        
+        strcat(data_combined, "<br>");
         
         if (gas_detection)
         {
             printf("WARNING! GAS LEAKAGE DETECTED!\n");
-            strcat(data_combined, "WARNING! GAS LEAKAGE DETECTED, ");
+            strcat(data_combined, "<p align=\"middle\" style=\"color:black;font-size:40px;\">WARNING! GAS LEAKAGE DETECTED</p> ");
         }
         else if (!gas_detection)
         {
             printf("Gas level fine \n");
-            strcat(data_combined, "Gas level fine, ");
+            strcat(data_combined, "<p align=\"middle\" style=\"color:black;font-size:40px;\">Gas level fine</p>");
         }
         if (movement_detection)
         {
             printf("Movement detected \n");
-            strcat(data_combined, "Movement detected, ");
+            strcat(data_combined, "<p align=\"middle\" style=\"color:black;font-size:40px;\">Movement detected</p>");
         }
         else if (!movement_detection)
         {
             printf("No movement detected \n");
-            strcat(data_combined, "No movement detected, ");
+            strcat(data_combined, "<p align=\"middle\" style=\"color:black;font-size:40px;\">No movement detected</p>");
         }
         
-        sprintf(buffer, "Temperature: %.1f C, Humidity: %.1f %%, Gas level: %.1f", temperature, humidity, gas_level);
-        strcat(data_combined, buffer);
         xSemaphoreTake(mutex, portMAX_DELAY);
+        
         strcpy(server_response, data_combined);
+        
         xSemaphoreGive(mutex);
         
         printf("Temperature: %.1f ° \n", temperature);
@@ -520,5 +526,4 @@ void app_main()
     xTaskCreatePinnedToCore(MQ5_handle_sensor, "Read MQ5 sensor", 1024 * 12, NULL, 11, NULL, 0);
     xTaskCreatePinnedToCore(PIR_handle_sensor, "Read PIR sensor", 1024 * 12, NULL, 10, NULL, 0);
     xTaskCreatePinnedToCore(manage_sensor_data, "Manage and print sensor data", 1024 * 32, NULL, 9, NULL, 0);
-    vTaskSuspend(NULL);
 }
