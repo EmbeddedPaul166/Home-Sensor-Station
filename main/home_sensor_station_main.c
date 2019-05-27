@@ -55,7 +55,7 @@ SemaphoreHandle_t mutex;
 QueueHandle_t temperature_queue;
 QueueHandle_t humidity_queue;
 QueueHandle_t gas_detection_queue;
-QueueHandle_t gas_percentege_queue;
+QueueHandle_t gas_level_queue;
 QueueHandle_t movement_detection_queue;
 
 static char server_response[400] = "No data acquired. Try again.";
@@ -140,6 +140,14 @@ static void event_handler(void* arg, esp_event_base_t event_base,
     }
     else if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_DISCONNECTED)
     {
+        /*httpd_handle_t* server = (httpd_handle_t*) arg;
+        if (*server)
+        {
+            ESP_LOGI(TAG, "Stopping webserver");
+            stop_webserver(*server);
+            *server = NULL;
+        }*/
+        
         if (s_retry_num < CONFIG_ESP_WIFI_MAXIMUM_RETRY)
         {
             esp_wifi_connect();
@@ -148,14 +156,7 @@ static void event_handler(void* arg, esp_event_base_t event_base,
             ESP_LOGI(TAG, "retry to connect to the AP");
         }
         ESP_LOGI(TAG,"connect to the AP fail");
-        
-        httpd_handle_t* server = (httpd_handle_t*) arg;
-        if (*server)
-        {
-            ESP_LOGI(TAG, "Stopping webserver");
-            stop_webserver(*server);
-            *server = NULL;
-        }
+         
     }
     else if (event_base == IP_EVENT && event_id == IP_EVENT_STA_GOT_IP)
     {
@@ -332,8 +333,8 @@ static esp_err_t AM2320_read(i2c_port_t i2c_port_number, uint8_t *upper_bits_buf
 void readSensor(uint8_t value, uint16_t * buffer, uint8_t * lower_bits_buffer,
                 uint8_t * upper_bits_buffer, uint8_t * dump_buffer)
 {
-    float temperature;
-    float humidity;
+    float temperature = 0;
+    float humidity = 0;
     if (value == 0)
     {    
         AM2320_wake(CONFIG_I2C_MASTER_PORT_NUMBER);
@@ -398,8 +399,6 @@ void MQ5_handle_sensor(void * pvParameters)
     vTaskDelay(2000 / portTICK_RATE_MS);
     
     int32_t voltage_read = 0;
-    //int32_t maximum_voltage_read = 4096;
-    //float gas_percentege = 0.0f;
     bool gas_detection = false;
     
     while (1)
@@ -416,8 +415,7 @@ void MQ5_handle_sensor(void * pvParameters)
         }
         
         adc2_get_raw( ADC2_CHANNEL_7, ADC_WIDTH_BIT_12, &voltage_read);
-        //gas_percentege = ((float)voltage_read/(float)maximum_voltage_read)*100.0f;
-        xQueueSend(gas_percentege_queue, &voltage_read, portMAX_DELAY);
+        xQueueSend(gas_level_queue, &voltage_read, portMAX_DELAY);
         vTaskDelay(1000 / portTICK_RATE_MS);    
     }
 }
@@ -454,44 +452,96 @@ void manage_sensor_data(void * pvParameters)
     float gas_level = 0;
     bool movement_detection = false;
     
+    float loop_buffer = 0;
+    float loop_counter = 0;
+    
     char data_combined[300] = "";
     char buffer[100] = "";
     
     while (1)
-    {
-        xQueueReceive(temperature_queue, &temperature, portMAX_DELAY);
-        xQueueReceive(humidity_queue, &humidity, portMAX_DELAY);
-        xQueueReceive(gas_detection_queue, &gas_detection, portMAX_DELAY);
-        xQueueReceive(gas_percentege_queue, &gas_level, portMAX_DELAY);
+    {   
+        //Receive values from queues and when it's necessary,
+        //calculate arithmetic means
+        while (uxQueueMessagesWaiting(temperature_queue))
+        {
+            xQueueReceive(temperature_queue, &temperature, portMAX_DELAY);
+            loop_buffer += temperature;
+            loop_counter++;
+        }
+        
+        temperature = loop_buffer / loop_counter;
+        loop_buffer = 0;
+        loop_counter = 0;
+        
+        while (uxQueueMessagesWaiting(humidity_queue))
+        {
+            QeueReceive(humidity_queue, &humidity, portMAX_DELAY);
+            loop_buffer += humidity;
+            loop_counter++;
+        }
+        
+        humidity = loop_buffer / loop_counter;
+        loop_buffer = 0;
+        loop_counter = 0;
+        
+        while (uxQueueMessagesWaiting(gas_level_queue))
+        {
+            xQueueReceive(gas_level_queue, &gas_level, portMAX_DELAY);
+            loop_buffer += gas_level;
+            loop_counter++;
+        }
+        
+        gas_level = loop_buffer / loop_counter;
+        loop_buffer = 0;
+        loop_counter = 0;
+        
+        xQueueReceive(gas_detection_queue, &gas_detection, portMAX_DELAY); 
         xQueueReceive(movement_detection_queue, &movement_detection, portMAX_DELAY);
-       
-        strcpy(data_combined, "<p align=\"middle\" style=\"color:black;font-size:100px;\">Sensors' data</p>");
         
-        sprintf(buffer, "<p align=\"middle\" style=\"color:black;font-size:40px;\">Temperature: %.1f C </p> <p align=\"middle\" style=\"color:black;font-size:40px;\">Humidity: %.1f %% </p> <p align=\"middle\" style=\"color:black;font-size:40px;\">Gas level: %.1f </p>", temperature, humidity, gas_level);
+        //Start forming server response in html used in get_handler
+        strcpy(data_combined, "<p align=\"middle\" style=\"color:black;font-size:100px;\">
+                              Sensors' data
+                              </p>");
         
-        strcat(data_combined, buffer);
+        sprintf(buffer, "<p align=\"middle\" style=\"color:black;font-size:40px;\">Temperature: %.1f C </p> 
+                         <p align=\"middle\" style=\"color:black;font-size:40px;\">Humidity: %.1f %% </p> 
+                         <p align=\"middle\" style=\"color:black;font-size:40px;\">Gas level: %.1f </p>", 
+                         temperature, humidity, gas_level);
         
+        strcat(data_combined, buffer);       
         strcat(data_combined, "<br>");
         
         if (gas_detection)
         {
             printf("WARNING! GAS LEAKAGE DETECTED!\n");
-            strcat(data_combined, "<p align=\"middle\" style=\"color:black;font-size:40px;\">WARNING! GAS LEAKAGE DETECTED</p> ");
+            
+            strcat(data_combined, "<p align=\"middle\" style=\"color:black;font-size:40px;\">
+                                   WARNING! GAS LEAKAGE DETECTED
+                                   </p> ");
         }
         else if (!gas_detection)
         {
             printf("Gas level fine \n");
-            strcat(data_combined, "<p align=\"middle\" style=\"color:black;font-size:40px;\">Gas level fine</p>");
+            
+            strcat(data_combined, "<p align=\"middle\" style=\"color:black;font-size:40px;\">
+                                   Gas level fine
+                                   </p>");
         }
         if (movement_detection)
         {
             printf("Movement detected \n");
-            strcat(data_combined, "<p align=\"middle\" style=\"color:black;font-size:40px;\">Movement detected</p>");
+            
+            strcat(data_combined, "<p align=\"middle\" style=\"color:black;font-size:40px;\">
+                                   Movement detected
+                                   </p>");
         }
         else if (!movement_detection)
         {
             printf("No movement detected \n");
-            strcat(data_combined, "<p align=\"middle\" style=\"color:black;font-size:40px;\">No movement detected</p>");
+            
+            strcat(data_combined, "<p align=\"middle\" style=\"color:black;font-size:40px;\">
+                                   No movement detected
+                                   </p>");
         }
         
         xSemaphoreTake(mutex, portMAX_DELAY);
@@ -504,7 +554,8 @@ void manage_sensor_data(void * pvParameters)
         printf("Humidity: %.1f %% \n", humidity);
         printf("Gas level: %.1f  \n", gas_level);
         printf("\n");
-        vTaskDelay(3000 / portTICK_RATE_MS);    
+        
+        vTaskDelay(8000 / portTICK_RATE_MS);    
     }
 }
 
@@ -516,10 +567,10 @@ void app_main()
 
     mutex = xSemaphoreCreateMutex();
 
-    temperature_queue = xQueueCreate(3, sizeof(float));
-    humidity_queue = xQueueCreate(3, sizeof(float));
+    temperature_queue = xQueueCreate(5, sizeof(float));
+    humidity_queue = xQueueCreate(5, sizeof(float));
     gas_detection_queue = xQueueCreate(1, sizeof(bool));
-    gas_percentege_queue = xQueueCreate(3, sizeof(float));
+    gas_level_queue = xQueueCreate(5, sizeof(float));
     movement_detection_queue = xQueueCreate(1, sizeof(bool));
 
     xTaskCreatePinnedToCore(AM2320_handle_sensor, "Read AM2320 sensor", 1024 * 12, NULL, 12, NULL, 0);
