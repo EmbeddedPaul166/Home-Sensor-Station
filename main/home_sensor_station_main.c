@@ -348,7 +348,7 @@ void readSensor(uint8_t value, uint16_t * buffer, uint8_t * lower_bits_buffer,
         *buffer <<= 8;
         *buffer |= *lower_bits_buffer;
         
-        temperature = (float)((int16_t)*buffer)/10.0f;
+        temperature = (float)*buffer/10.0f;
         xQueueSend(temperature_queue, &temperature, portMAX_DELAY);
     }
     else if (value == 1)
@@ -444,68 +444,77 @@ void PIR_handle_sensor(void * pvParameters)
 
 void manage_sensor_data(void * pvParameters)
 {
-    vTaskDelay(4000 / portTICK_RATE_MS);
-    
+    vTaskDelay(8000 / portTICK_RATE_MS);
+     
+    bool gas_detection = false; 
+    bool movement_detection = false;
     float temperature = 0;
     float humidity = 0;
-    bool gas_detection = false;
     float gas_level = 0;
-    bool movement_detection = false;
     
     float loop_buffer = 0;
     float loop_counter = 0;
     
-    char data_combined[300] = "";
-    char buffer[100] = "";
+    char data_combined[400] = "";
+    char buffer[200] = "";
     
     while (1)
     {   
         //Receive values from queues and when it's necessary,
         //calculate arithmetic means
-        while (uxQueueMessagesWaiting(temperature_queue))
+        while (uxQueueMessagesWaiting(temperature_queue) > 0)
         {
             xQueueReceive(temperature_queue, &temperature, portMAX_DELAY);
             loop_buffer += temperature;
             loop_counter++;
         }
-        
-        temperature = loop_buffer / loop_counter;
+        if (loop_counter != 0)
+        {
+            temperature = loop_buffer / loop_counter;    
+        } 
         loop_buffer = 0;
         loop_counter = 0;
         
-        while (uxQueueMessagesWaiting(humidity_queue))
+        while (uxQueueMessagesWaiting(humidity_queue) > 0)
         {
-            QeueReceive(humidity_queue, &humidity, portMAX_DELAY);
+            xQueueReceive(humidity_queue, &humidity, portMAX_DELAY);
             loop_buffer += humidity;
             loop_counter++;
         }
-        
-        humidity = loop_buffer / loop_counter;
+        if (loop_counter != 0)
+        {
+            humidity = loop_buffer / loop_counter;    
+        } 
         loop_buffer = 0;
         loop_counter = 0;
         
-        while (uxQueueMessagesWaiting(gas_level_queue))
+        while (uxQueueMessagesWaiting(gas_level_queue) > 0)
         {
             xQueueReceive(gas_level_queue, &gas_level, portMAX_DELAY);
             loop_buffer += gas_level;
             loop_counter++;
         }
-        
-        gas_level = loop_buffer / loop_counter;
+        if (loop_counter != 0)
+        {
+            gas_level = loop_buffer / loop_counter;    
+        } 
         loop_buffer = 0;
         loop_counter = 0;
         
         xQueueReceive(gas_detection_queue, &gas_detection, portMAX_DELAY); 
         xQueueReceive(movement_detection_queue, &movement_detection, portMAX_DELAY);
         
-        //Start forming server response in html used in get_handler
-        strcpy(data_combined, "<p align=\"middle\" style=\"color:black;font-size:100px;\">
-                              Sensors' data
-                              </p>");
+        strcpy(data_combined, "");
+        strcpy(buffer, "");
         
-        sprintf(buffer, "<p align=\"middle\" style=\"color:black;font-size:40px;\">Temperature: %.1f C </p> 
-                         <p align=\"middle\" style=\"color:black;font-size:40px;\">Humidity: %.1f %% </p> 
-                         <p align=\"middle\" style=\"color:black;font-size:40px;\">Gas level: %.1f </p>", 
+        //Start forming server response in html used in get_handler
+        strcpy(data_combined, "<p align=\"middle\" style=\"color:black;font-size:100px;\">"
+                              "Sensors' data"
+                              "</p>");
+        
+        sprintf(buffer, "<p align=\"middle\" style=\"color:black;font-size:40px;\">Temperature: %.1f C </p>" 
+                         "<p align=\"middle\" style=\"color:black;font-size:40px;\">Humidity: %.1f %% </p>" 
+                         "<p align=\"middle\" style=\"color:black;font-size:40px;\">Gas level: %.1f </p>", 
                          temperature, humidity, gas_level);
         
         strcat(data_combined, buffer);       
@@ -515,33 +524,33 @@ void manage_sensor_data(void * pvParameters)
         {
             printf("WARNING! GAS LEAKAGE DETECTED!\n");
             
-            strcat(data_combined, "<p align=\"middle\" style=\"color:black;font-size:40px;\">
-                                   WARNING! GAS LEAKAGE DETECTED
-                                   </p> ");
+            strcat(data_combined, "<p align=\"middle\" style=\"color:black;font-size:40px;\">"
+                                   "WARNING! GAS LEAKAGE DETECTED"
+                                   "</p> ");
         }
         else if (!gas_detection)
         {
             printf("Gas level fine \n");
             
-            strcat(data_combined, "<p align=\"middle\" style=\"color:black;font-size:40px;\">
-                                   Gas level fine
-                                   </p>");
+            strcat(data_combined, "<p align=\"middle\" style=\"color:black;font-size:40px;\">"
+                                   "Gas level fine"
+                                   "</p>");
         }
         if (movement_detection)
         {
             printf("Movement detected \n");
             
-            strcat(data_combined, "<p align=\"middle\" style=\"color:black;font-size:40px;\">
-                                   Movement detected
-                                   </p>");
+            strcat(data_combined, "<p align=\"middle\" style=\"color:black;font-size:40px;\">"
+                                   "Movement detected"
+                                   "</p>");
         }
         else if (!movement_detection)
         {
             printf("No movement detected \n");
             
-            strcat(data_combined, "<p align=\"middle\" style=\"color:black;font-size:40px;\">
-                                   No movement detected
-                                   </p>");
+            strcat(data_combined, "<p align=\"middle\" style=\"color:black;font-size:40px;\">"
+                                   "No movement detected"
+                                   "</p>");
         }
         
         xSemaphoreTake(mutex, portMAX_DELAY);
