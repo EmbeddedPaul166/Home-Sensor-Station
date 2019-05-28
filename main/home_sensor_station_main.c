@@ -70,12 +70,9 @@ static int s_retry_num = 0;
 
 static esp_err_t get_handler(httpd_req_t *req)
 {
-    xSemaphoreTake(mutex, portMAX_DELAY);
-    char * resp_str = (char *) req->user_ctx;
+    xSemaphoreTake(mutex, portMAX_DELAY); 
+    ESP_ERROR_CHECK(httpd_resp_send(req, &server_response, strlen(server_response)));
     xSemaphoreGive(mutex);
-    
-    httpd_resp_send(req, resp_str, strlen(resp_str));
-    
     return ESP_OK;
 }
 
@@ -84,7 +81,9 @@ static const httpd_uri_t sensors_data =
     .uri       = "/sensors",
     .method    = HTTP_GET,
     .handler   = get_handler,
-    .user_ctx  = &server_response
+    //.user_ctx  = &server_response
+    //.user_ctx = "TEST"
+    .user_ctx = NULL
 };
 
 static httpd_handle_t start_webserver(void)
