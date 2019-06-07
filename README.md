@@ -13,15 +13,18 @@ Project can be configured with:
 
 make menuconfig
 
-And under "Configuration option" there is an application specific configuration like wi-fi and sensor settings.
+And under "Configuration" option there is an application-specific configuration like wi-fi and sensor settings.
 
-Current state of the application is finished. Although there sometimes occurs IllegalInstruction error.
-Currently I don't have the means to debug this error and also I need to move to other projects, so this is the final state for now.
+Application is finished for now. Although there sometimes occurs IllegalInstruction error.
+Currently I don't have the means to debug this error and also I need to move to other projects,
+so this is the final state for now. I might get back to it sometime later though.
+
+|Sample website data presentation example:|Sample serial data presentation example:|
+|-----------------------------------------|----------------------------------------|
+
+| <img src="https://github.com/EmbeddedPaul166/Home-Sensor-Station/blob/master/sample_output_website.png" height="400"> | <img src="https://github.com/EmbeddedPaul166/Home-Sensor-Station/blob/master/sample_output_serial.png" height="400"> |
 
 
 
-|Sample data presentation:|
-|------------------------|
 
-| <img src="https://github.com/EmbeddedPaul166/Home-Sensor-Station/edit/master/sample_output.png"> |
 
