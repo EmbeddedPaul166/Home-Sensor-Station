@@ -25,10 +25,7 @@ make flash
 ```
 
 ### Sample output
-|Sample website data presentation example:|Sample serial data presentation example:|
-|-----------------------------------------|----------------------------------------|
-
-<img src="https://github.com/EmbeddedPaul166/Home-Sensor-Station/blob/master/sample_output_website.png" height="400"> <img src="https://github.com/EmbeddedPaul166/Home-Sensor-Station/blob/master/sample_output_serial.png" height="400"> |
+<img src="https://github.com/EmbeddedPaul166/Home-Sensor-Station/blob/master/sample_output_website.png" height="400"> <img src="https://github.com/EmbeddedPaul166/Home-Sensor-Station/blob/master/sample_output_serial.png" height="400">
 
 ### Quick note
 Application is finished for now. Although there sometimes occurs IllegalInstruction error.
