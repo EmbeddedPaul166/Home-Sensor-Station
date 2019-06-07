@@ -10,3 +10,5 @@ ESP-IDF together with xtensa-esp32 toolchain were used.
 
 Application is currently under development. Current state:
 - AM2320 I2C handling is completed
+- MQ5 handling is completed
+- PIR handling is completed
