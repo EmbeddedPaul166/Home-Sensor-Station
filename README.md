@@ -10,6 +10,9 @@ This is a home sensor station with a simple http web server to present data. It 
 
 Data is presented through serial port and a website in LAN.
 
+### Electrical schematic
+<img src="https://github.com/EmbeddedPaul166/Home-Sensor-Station/blob/master/project_schematic.png" height="400">
+
 ### How to run
 To run this project on your hardware you will need ESP-IDF together with xtensa-esp32 toolchain.
 
